@@ -340,3 +340,88 @@ export const downloadExcel = async (req: AuthRequest, res: Response): Promise<vo
   await workbook.xlsx.write(res);
   res.end();
 };
+
+export const getEODReport = async (req: AuthRequest, res: Response): Promise<void> => {
+  const companyId = req.user!.companyId!;
+  const { date } = req.query;
+
+  const targetDate = date ? new Date(String(date)) : new Date();
+  const dayStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0);
+  const dayEnd = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59);
+
+  const where = { companyId, createdAt: { gte: dayStart, lte: dayEnd } };
+
+  const [sales, refundedSales, voidedSales, topItems] = await Promise.all([
+    prisma.sale.findMany({
+      where: { ...where, status: 'COMPLETED' },
+      include: {
+        payments: true,
+        cashier: { select: { id: true, name: true } },
+        items: { include: { product: { select: { name: true } } } },
+      },
+    }),
+    prisma.sale.findMany({
+      where: { ...where, status: 'REFUNDED' },
+      select: { total: true },
+    }),
+    prisma.sale.count({
+      where: { ...where, status: 'VOID' },
+    }),
+    prisma.saleItem.groupBy({
+      by: ['productId'],
+      where: { sale: { ...where, status: 'COMPLETED' } },
+      _sum: { qty: true, lineTotal: true },
+      orderBy: { _sum: { lineTotal: 'desc' } },
+      take: 10,
+    }),
+  ]);
+
+  // Payment breakdown
+  const paymentMap: Record<string, { count: number; total: number }> = {};
+  let totalRevenue = 0;
+  let totalTax = 0;
+  let totalDiscount = 0;
+  for (const sale of sales) {
+    totalRevenue += Number(sale.total);
+    totalTax += Number(sale.taxAmount);
+    totalDiscount += Number(sale.discountAmount);
+    for (const p of sale.payments) {
+      if (!paymentMap[p.method]) paymentMap[p.method] = { count: 0, total: 0 };
+      paymentMap[p.method].count++;
+      paymentMap[p.method].total += Number(p.amount);
+    }
+  }
+
+  // Cashier breakdown
+  const cashierMap: Record<number, { name: string; sales: number; revenue: number }> = {};
+  for (const sale of sales) {
+    const cId = sale.cashierId;
+    if (!cashierMap[cId]) cashierMap[cId] = { name: sale.cashier.name, sales: 0, revenue: 0 };
+    cashierMap[cId].sales++;
+    cashierMap[cId].revenue += Number(sale.total);
+  }
+
+  // Top items with names
+  const productIds = topItems.map((t) => t.productId);
+  const products = await prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true, name: true } });
+  const productMap = Object.fromEntries(products.map((p) => [p.id, p.name]));
+
+  res.json({
+    date: dayStart.toISOString(),
+    totalTransactions: sales.length,
+    totalRevenue,
+    totalTax,
+    totalDiscount,
+    netRevenue: totalRevenue - totalTax - totalDiscount,
+    paymentBreakdown: Object.entries(paymentMap).map(([method, data]) => ({ method, count: data.count, total: data.total })),
+    cashiersOnDuty: Object.values(cashierMap),
+    topItems: topItems.map((t) => ({
+      name: productMap[t.productId] || 'Unknown',
+      qty: Number(t._sum.qty) || 0,
+      revenue: Number(t._sum.lineTotal) || 0,
+    })),
+    refunds: refundedSales.length,
+    refundAmount: refundedSales.reduce((s, r) => s + Number(r.total), 0),
+    voids: voidedSales,
+  });
+};

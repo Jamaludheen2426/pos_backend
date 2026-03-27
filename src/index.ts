@@ -14,10 +14,7 @@ initSocketServer(httpServer);
 
 // Middleware
 app.use(cors({
-  origin: [
-    process.env.CREATOR_PANEL_URL || 'http://localhost:3000',
-    process.env.CLIENT_WEB_URL   || 'http://localhost:3002',
-  ],
+  origin: true,
   credentials: true,
 }));
 
