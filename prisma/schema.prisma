@@ -1,0 +1,433 @@
+// SaaS POS Platform — Prisma Schema
+// Multi-tenant: all tables isolated by company_id
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── MULTI-TENANT CORE ────────────────────────────────────────────────────────
+
+model Plan {
+  id              Int      @id @default(autoincrement())
+  name            String   @unique // basic | pro | enterprise
+  maxStores       Int      // 1 | 5 | -1 (unlimited)
+  maxUsers        Int      // 3 | 15 | -1
+  maxProducts     Int      // 500 | 5000 | -1
+  hasMobileApp    Boolean  @default(false)
+  hasOfflineMode  Boolean  @default(false)
+  hasAdvancedReports Boolean @default(false)
+  createdAt       DateTime @default(now())
+
+  companies       Company[]
+  subscriptions   Subscription[]
+}
+
+model Company {
+  id          Int      @id @default(autoincrement())
+  name        String
+  email       String   @unique
+  phone       String?
+  status      CompanyStatus @default(ACTIVE)
+  planId      Int
+  plan        Plan     @relation(fields: [planId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  settings        CompanySettings?
+  subscriptions   Subscription[]
+  users           User[]
+  stores          Store[]
+  products        Product[]
+  suppliers       Supplier[]
+  customers       Customer[]
+  discountRules   DiscountRule[]
+  taxRates        TaxRate[]
+  sales           Sale[]
+  stockMovements  StockMovement[]
+  purchaseOrders  PurchaseOrder[]
+}
+
+enum CompanyStatus {
+  ACTIVE
+  SUSPENDED
+  EXPIRED
+}
+
+model CompanySettings {
+  id                  Int      @id @default(autoincrement())
+  companyId           Int      @unique
+  company             Company  @relation(fields: [companyId], references: [id])
+
+  // Module toggles
+  multiStore          Boolean  @default(false)
+  productVariants     Boolean  @default(false)
+  weightBasedProducts Boolean  @default(false)
+  expiryTracking      Boolean  @default(false)
+  loyaltyPoints       Boolean  @default(false)
+  suppliers           Boolean  @default(false)
+  stockTransfer       Boolean  @default(false)
+  discountRules       Boolean  @default(false)
+  gstBilling          Boolean  @default(false)
+  customerProfiles    Boolean  @default(false)
+  reports             Boolean  @default(false)
+  offlineMode         Boolean  @default(false)
+
+  // Offline config
+  offlineAllowedDays  Int      @default(0)
+
+  // Branding
+  logoUrl             String?
+  primaryColor        String?  @default("#3b82f6")
+
+  updatedAt           DateTime @updatedAt
+}
+
+model Subscription {
+  id            Int      @id @default(autoincrement())
+  companyId     Int
+  company       Company  @relation(fields: [companyId], references: [id])
+  planId        Int
+  plan          Plan     @relation(fields: [planId], references: [id])
+  status        SubscriptionStatus @default(ACTIVE)
+  startDate     DateTime
+  endDate       DateTime
+  nextBillingAt DateTime?
+  razorpaySubId String?
+  createdAt     DateTime @default(now())
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+// ─── USERS ────────────────────────────────────────────────────────────────────
+
+model User {
+  id              Int      @id @default(autoincrement())
+  companyId       Int?     // null = creator/super-admin
+  company         Company? @relation(fields: [companyId], references: [id])
+  storeId         Int?
+  store           Store?   @relation(fields: [storeId], references: [id])
+  name            String
+  email           String   @unique
+  passwordHash    String
+  mobilePasswordHash String? // optional mobile-specific password
+  role            UserRole @default(CASHIER)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  refreshTokens   RefreshToken[]
+  sales           Sale[]
+}
+
+enum UserRole {
+  CREATOR        // developer super admin
+  OWNER          // client company owner
+  MANAGER
+  CASHIER
+}
+
+model RefreshToken {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id])
+  token       String   @unique @db.VarChar(512)
+  platform    Platform @default(WEB)
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime @default(now())
+}
+
+enum Platform {
+  WEB
+  MOBILE
+}
+
+// ─── STORES ───────────────────────────────────────────────────────────────────
+
+model Store {
+  id          Int      @id @default(autoincrement())
+  companyId   Int
+  company     Company  @relation(fields: [companyId], references: [id])
+  name        String
+  address     String?
+  phone       String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  users           User[]
+  stock           Stock[]
+  sales           Sale[]
+  transfersFrom   StockTransfer[] @relation("TransferFrom")
+  transfersTo     StockTransfer[] @relation("TransferTo")
+  purchaseOrders  PurchaseOrder[]
+}
+
+// ─── PRODUCTS & INVENTORY ─────────────────────────────────────────────────────
+
+model Product {
+  id          Int      @id @default(autoincrement())
+  companyId   Int
+  company     Company  @relation(fields: [companyId], references: [id])
+  name        String
+  sku         String?
+  barcode     String?
+  category    String?
+  basePrice   Decimal  @db.Decimal(10, 2)
+  taxRateId   Int?
+  taxRate     TaxRate? @relation(fields: [taxRateId], references: [id])
+  isWeightBased Boolean @default(false)
+  unit        String?  // kg, g, L, pcs
+  expiryTracking Boolean @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  variants    ProductVariant[]
+  stock       Stock[]
+  saleItems   SaleItem[]
+
+  @@index([companyId, barcode])
+}
+
+model ProductVariant {
+  id          Int      @id @default(autoincrement())
+  productId   Int
+  product     Product  @relation(fields: [productId], references: [id])
+  size        String?
+  color       String?
+  price       Decimal  @db.Decimal(10, 2)
+  barcode     String?
+  sku         String?
+  isActive    Boolean  @default(true)
+
+  stock       Stock[]
+  saleItems   SaleItem[]
+}
+
+model Stock {
+  id          Int      @id @default(autoincrement())
+  companyId   Int
+  storeId     Int
+  store       Store    @relation(fields: [storeId], references: [id])
+  productId   Int
+  product     Product  @relation(fields: [productId], references: [id])
+  variantId   Int?
+  variant     ProductVariant? @relation(fields: [variantId], references: [id])
+  qty         Decimal  @db.Decimal(10, 3)
+  lowStockAt  Int?     @default(10)
+  expiryDate  DateTime?
+  updatedAt   DateTime @updatedAt
+
+  @@unique([storeId, productId, variantId])
+}
+
+model StockMovement {
+  id          Int      @id @default(autoincrement())
+  companyId   Int
+  company     Company  @relation(fields: [companyId], references: [id])
+  productId   Int
+  variantId   Int?
+  storeId     Int
+  type        MovementType
+  qty         Decimal  @db.Decimal(10, 3)
+  note        String?
+  referenceId Int?     // sale_id or purchase_order_id
+  createdAt   DateTime @default(now())
+}
+
+enum MovementType {
+  PURCHASE
+  SALE
+  TRANSFER_IN
+  TRANSFER_OUT
+  ADJUSTMENT
+}
+
+model StockTransfer {
+  id            Int      @id @default(autoincrement())
+  fromStoreId   Int
+  fromStore     Store    @relation("TransferFrom", fields: [fromStoreId], references: [id])
+  toStoreId     Int
+  toStore       Store    @relation("TransferTo", fields: [toStoreId], references: [id])
+  productId     Int
+  variantId     Int?
+  qty           Decimal  @db.Decimal(10, 3)
+  note          String?
+  createdAt     DateTime @default(now())
+}
+
+// ─── SUPPLIERS & PURCHASE ORDERS ──────────────────────────────────────────────
+
+model Supplier {
+  id          Int      @id @default(autoincrement())
+  companyId   Int
+  company     Company  @relation(fields: [companyId], references: [id])
+  name        String
+  email       String?
+  phone       String?
+  address     String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  purchaseOrders PurchaseOrder[]
+}
+
+model PurchaseOrder {
+  id          Int      @id @default(autoincrement())
+  companyId   Int
+  company     Company  @relation(fields: [companyId], references: [id])
+  storeId     Int
+  store       Store    @relation(fields: [storeId], references: [id])
+  supplierId  Int
+  supplier    Supplier @relation(fields: [supplierId], references: [id])
+  status      POStatus @default(PENDING)
+  totalAmount Decimal  @db.Decimal(10, 2)
+  note        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items       PurchaseOrderItem[]
+}
+
+enum POStatus {
+  PENDING
+  RECEIVED
+  CANCELLED
+}
+
+model PurchaseOrderItem {
+  id              Int      @id @default(autoincrement())
+  purchaseOrderId Int
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  productId       Int
+  variantId       Int?
+  qty             Decimal  @db.Decimal(10, 3)
+  costPrice       Decimal  @db.Decimal(10, 2)
+}
+
+// ─── BILLING & SALES ──────────────────────────────────────────────────────────
+
+model Sale {
+  id            Int      @id @default(autoincrement())
+  companyId     Int
+  company       Company  @relation(fields: [companyId], references: [id])
+  storeId       Int
+  store         Store    @relation(fields: [storeId], references: [id])
+  cashierId     Int
+  cashier       User     @relation(fields: [cashierId], references: [id])
+  customerId    Int?
+  customer      Customer? @relation(fields: [customerId], references: [id])
+  subtotal      Decimal  @db.Decimal(10, 2)
+  discountAmount Decimal @db.Decimal(10, 2) @default(0)
+  taxAmount     Decimal  @db.Decimal(10, 2) @default(0)
+  total         Decimal  @db.Decimal(10, 2)
+  loyaltyPointsUsed Int  @default(0)
+  receiptNo     String   @unique
+  status        SaleStatus @default(COMPLETED)
+  syncedAt      DateTime?  // for offline sales
+  createdAt     DateTime @default(now())
+
+  items         SaleItem[]
+  payments      Payment[]
+}
+
+enum SaleStatus {
+  COMPLETED
+  REFUNDED
+  VOID
+}
+
+model SaleItem {
+  id          Int      @id @default(autoincrement())
+  saleId      Int
+  sale        Sale     @relation(fields: [saleId], references: [id])
+  productId   Int
+  product     Product  @relation(fields: [productId], references: [id])
+  variantId   Int?
+  variant     ProductVariant? @relation(fields: [variantId], references: [id])
+  qty         Decimal  @db.Decimal(10, 3)
+  unitPrice   Decimal  @db.Decimal(10, 2)
+  discount    Decimal  @db.Decimal(10, 2) @default(0)
+  taxAmount   Decimal  @db.Decimal(10, 2) @default(0)
+  lineTotal   Decimal  @db.Decimal(10, 2)
+}
+
+model Payment {
+  id          Int      @id @default(autoincrement())
+  saleId      Int
+  sale        Sale     @relation(fields: [saleId], references: [id])
+  method      PaymentMethod
+  amount      Decimal  @db.Decimal(10, 2)
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  UPI
+}
+
+// ─── CUSTOMERS & LOYALTY ──────────────────────────────────────────────────────
+
+model Customer {
+  id          Int      @id @default(autoincrement())
+  companyId   Int
+  company     Company  @relation(fields: [companyId], references: [id])
+  name        String
+  phone       String?
+  email       String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  sales         Sale[]
+  loyaltyPoints LoyaltyPoints[]
+}
+
+model LoyaltyPoints {
+  id          Int      @id @default(autoincrement())
+  customerId  Int
+  customer    Customer @relation(fields: [customerId], references: [id])
+  points      Int      @default(0)
+  updatedAt   DateTime @updatedAt
+}
+
+// ─── DISCOUNTS & TAX ──────────────────────────────────────────────────────────
+
+model DiscountRule {
+  id          Int      @id @default(autoincrement())
+  companyId   Int
+  company     Company  @relation(fields: [companyId], references: [id])
+  code        String?
+  type        DiscountType
+  value       Decimal  @db.Decimal(10, 2)
+  minOrderAmt Decimal? @db.Decimal(10, 2)
+  maxUses     Int?
+  usedCount   Int      @default(0)
+  expiresAt   DateTime?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}
+
+enum DiscountType {
+  FLAT
+  PERCENTAGE
+}
+
+model TaxRate {
+  id          Int      @id @default(autoincrement())
+  companyId   Int
+  company     Company  @relation(fields: [companyId], references: [id])
+  name        String   // e.g. "GST 18%"
+  rate        Decimal  @db.Decimal(5, 2)  // 0, 5, 12, 18, 28
+  isDefault   Boolean  @default(false)
+
+  products    Product[]
+}
