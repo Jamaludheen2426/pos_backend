@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import { MovementType } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 
@@ -123,7 +124,14 @@ export const listStockMovements = async (req: AuthRequest, res: Response): Promi
   const where: Record<string, unknown> = { companyId };
   if (productId) where.productId = Number(productId);
   if (storeId) where.storeId = Number(storeId);
-  if (type) where.type = String(type);
+  if (type) {
+    const t = String(type).toUpperCase();
+    if (t === 'TRANSFER') {
+      where.type = { in: [MovementType.TRANSFER_IN, MovementType.TRANSFER_OUT] };
+    } else if (Object.values(MovementType).includes(t as MovementType)) {
+      where.type = t as MovementType;
+    }
+  }
 
   const [movements, total] = await Promise.all([
     prisma.stockMovement.findMany({

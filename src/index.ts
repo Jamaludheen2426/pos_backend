@@ -14,9 +14,12 @@ initSocketServer(httpServer);
 
 // Middleware
 app.use(cors({
-  origin: true,
+  origin: (origin, callback) => callback(null, origin || '*'),
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+app.options('*', cors());
 
 app.use(express.json({ limit: '10mb' }));
 
