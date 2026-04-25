@@ -14,6 +14,7 @@ import purchaseOrderRoutes from './purchaseOrders.routes';
 import taxRateRoutes from './taxRates.routes';
 import discountRuleRoutes from './discountRules.routes';
 import stockManagementRoutes from './stockManagement.routes';
+import shiftRoutes from './shifts.routes';
 
 const router = Router();
 
@@ -32,5 +33,6 @@ router.use('/purchase-orders', purchaseOrderRoutes);
 router.use('/tax-rates', taxRateRoutes);
 router.use('/discount-rules', discountRuleRoutes);
 router.use('/stock-management', stockManagementRoutes);
+router.use('/shifts', shiftRoutes);
 
 export default router;

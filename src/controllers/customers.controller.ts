@@ -6,6 +6,7 @@ export const listCustomers = async (req: AuthRequest, res: Response): Promise<vo
   const companyId = req.user!.companyId!;
   const customers = await prisma.customer.findMany({
     where: { companyId },
+    include: { loyaltyPoints: { select: { points: true } } },
     orderBy: { createdAt: 'desc' },
   });
   res.json(customers);
@@ -14,9 +15,18 @@ export const listCustomers = async (req: AuthRequest, res: Response): Promise<vo
 export const createCustomer = async (req: AuthRequest, res: Response): Promise<void> => {
   const companyId = req.user!.companyId!;
   const { name, email, phone } = req.body;
-  const customer = await prisma.customer.create({
-    data: { companyId, name, email, phone },
+
+  // Create customer + seed their LoyaltyPoints record atomically
+  const customer = await prisma.$transaction(async (tx) => {
+    const newCustomer = await tx.customer.create({
+      data: { companyId, name, email, phone },
+    });
+    await tx.loyaltyPoints.create({
+      data: { customerId: newCustomer.id, points: 0 },
+    });
+    return newCustomer;
   });
+
   res.status(201).json(customer);
 };
 

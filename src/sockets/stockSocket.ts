@@ -1,11 +1,16 @@
 import { Server } from 'socket.io';
 import { Server as HttpServer } from 'http';
 import { verifyToken } from '../lib/jwt';
+import { setIo } from '../lib/socket';
+import logger from '../lib/logger';
 
 export const initSocketServer = (httpServer: HttpServer): Server => {
   const io = new Server(httpServer, {
     cors: { origin: '*', methods: ['GET', 'POST'] },
   });
+
+  // Register the singleton so controllers can emit without carrying io around
+  setIo(io);
 
   io.use((socket, next) => {
     const token = socket.handshake.auth?.token;
@@ -20,10 +25,9 @@ export const initSocketServer = (httpServer: HttpServer): Server => {
   });
 
   io.on('connection', (socket) => {
-    const user = (socket as unknown as Record<string, unknown>).user as { companyId: number };
-
-    // Join company room for isolated stock updates
+    const user = (socket as unknown as Record<string, unknown>).user as { companyId: number; userId: number };
     socket.join(`company:${user.companyId}`);
+    logger.info({ userId: user.userId, companyId: user.companyId }, 'ws connected');
 
     socket.on('disconnect', () => {
       socket.leave(`company:${user.companyId}`);
@@ -31,9 +35,4 @@ export const initSocketServer = (httpServer: HttpServer): Server => {
   });
 
   return io;
-};
-
-// Call this after a sale to push real-time stock update
-export const emitStockUpdate = (io: Server, companyId: number, data: unknown): void => {
-  io.to(`company:${companyId}`).emit('stock:updated', data);
 };
